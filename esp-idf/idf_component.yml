@@ -1,0 +1,12 @@
+description: "rnsh: Reticulum remote shell (client + server) for spangap."
+url: https://github.com/spangap/rnsh
+version: "0.1.0"
+license: "Apache-2.0"
+targets:
+  - esp32s3
+dependencies:
+  idf:
+    version: ">=5.5"
+  # Cross-straddle deps are declared in straddle.yaml's `requires:` and staged
+  # short-named via EXTRA_COMPONENT_DIRS at consumer-build time — not here, to
+  # avoid double-staging under the manager's namespaced form.

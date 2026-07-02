@@ -1,0 +1,42 @@
+# rnsh — Reticulum remote shell (client + server) for spangap.
+#
+# Two halves in one straddle:
+#   * client — the `rnsh <dest_hash> [aspect]` CLI command: opens a reliable
+#     Channel to a remote node's `rnsh` destination and relays an interactive
+#     CLI session over it (the remote's stdout+stderr arrive collapsed into the
+#     one Channel stream).
+#   * server — a daemon that hosts the `rnsh` destination aspect, accepts an
+#     incoming Channel, and bridges it to the device CLI with the admin-password
+#     login gate forced on (cli_connect_t.login). Default off.
+#
+# Rides on rns's Channel API (rnsdChannelOpen / rnsdDestListenChannels); the
+# Link is end-to-end encrypted and authenticated by Reticulum, so rnsh adds no
+# crypto of its own — only the application-level admin gate.
+schema_version: 1
+name: reticulous/rnsh
+prefix: rnsh
+version: 0.0.0
+firmware: esp-idf
+platforms: [idf]
+requires:
+  - reticulous/rns
+# Auto-init: folded into the generated spangapInitStraddles(). rnshInit()
+# registers the `rnsh` client CLI command and spawns the server task (which
+# stays idle until s.rnsh.server.enabled flips on). rns brings rnsd up first
+# (dependency order), so the Channel API is available.
+init:
+  - call: rnshInit
+
+# Declarative settings: LCD pane + storage defaults from one source.
+settings:
+  - menu:
+      - { id: mesh, label: "Mesh Network", placement: 3 }
+      - { id: rnsh, label: "Remote shell" }
+    web: false
+    rows:
+      - section: "Reticulum shell (rnsh)"
+      - switch: { label: "Server enabled", key: "s.rnsh.server.enabled", default: 0 }
+      - switch: { label: "Server color", key: "s.rnsh.server.color", default: 0 }
+      - slider: { label: "Announce (s)", key: "s.rnsh.server.announce_interval", min: 0, max: 21600, default: 1800 }
+      - value:  { label: "Server address", key: "rnsh.server.dest" }
+      - caption: "The server exposes this device's CLI over Reticulum. Access requires the admin password (set with `passwd`)."
