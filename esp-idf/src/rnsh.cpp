@@ -38,7 +38,9 @@ static const char* TAG = "rnsh";
                                        (distinct from lxmf 100/101, clink 120) */
 #define RNSH_MAX_SESSIONS   2
 #define RNSH_IDENTITY_KEY   "secrets.rnsh.identity"
-#define RNSH_ESCAPE_BYTE    0x1D    /* Ctrl-] — client quits the session */
+/* Line-start disconnect escape — same as the ssh client (`..!`). A single
+ * control byte like Ctrl-] is a poor fit: the T-Deck keyboard has no `]`. */
+static const char RNSH_ESC[] = "..!";
 
 /* ═══════════════════════════ client ═══════════════════════════ */
 
@@ -65,7 +67,7 @@ static void cliRnsh(const char* args) {
     if (cliWantsHelp(args)) {
         cliPrintf("rnsh <dest_hash> [aspect]   open a remote CLI over Reticulum\n");
         cliPrintf("                            dest_hash = 32-hex; aspect defaults to \"rnsh\"\n");
-        cliPrintf("                            Ctrl-] to quit.\n");
+        cliPrintf("                            type '..!' on a new line to disconnect.\n");
         return;
     }
     /* Parse: <dest_hash> [aspect] */
@@ -125,34 +127,57 @@ static void cliRnsh(const char* args) {
         return;
     }
 
-    cliPrintf("rnsh: connected. Ctrl-] to quit.\r\n");
+    cliPrintf("rnsh: connected  ('..!' on a new line disconnects)\r\n");
 
     /* Relay buffers live in PSRAM statics, not on the stack: the cli task has a
      * modest 6 KB stack and this command's frame would otherwise spike it (and
      * the whole frame is reserved on entry even for the early-return help path).
-     * CLI commands are serialized on the cli task, so statics are safe. */
+     * CLI commands are serialized on the cli task, so statics are safe. `fwd`
+     * holds the escape-filtered bytes (up to `in` plus a 2-char withheld
+     * prefix flush). */
     PSRAM_BSS static char in[256];
     PSRAM_BSS static char out[600];
+    PSRAM_BSS static char fwd[260];
 
     /* Interactive relay: operator keystrokes → channel; channel messages →
-     * operator terminal. Everything from the remote is one collapsed stream. */
+     * operator terminal. Everything from the remote is one collapsed stream.
+     * `..!` at the start of a line disconnects (same escape as the ssh client);
+     * a partial match (`.`/`..`) not completed is forwarded verbatim, so only a
+     * literal `..!` line-start is ever eaten. */
+    bool   atLineStart = true;
+    size_t escMatch    = 0;   /* chars of RNSH_ESC withheld so far */
     for (;;) {
         if (!itsConnected(ch)) { cliPrintf("\r\nrnsh: session closed.\r\n"); break; }
-
-        /* Operator input (short block so output stays responsive). */
-        int r = cliReadRaw(in, sizeof(in), 20);
-        if (r < 0) break;                       /* operator session gone */
-        if (r > 0) {
-            /* Escape byte quits without forwarding. */
-            bool quit = false;
-            for (int i = 0; i < r; i++) if ((uint8_t)in[i] == RNSH_ESCAPE_BYTE) { quit = true; break; }
-            if (quit) { cliPrintf("\r\nrnsh: disconnected.\r\n"); break; }
-            itsSend(ch, in, r, pdMS_TO_TICKS(1000));
-        }
 
         /* Remote output. */
         size_t m = itsRecv(ch, out, sizeof(out), 0);
         if (m > 0) cliWrite(out, m);
+
+        /* Operator input (short block so output stays responsive). */
+        int r = cliReadRaw(in, sizeof(in), 20);
+        if (r < 0) break;                       /* operator session gone */
+        if (r == 0) continue;
+
+        int  fn = 0;
+        bool quit = false;
+        for (int i = 0; i < r; i++) {
+            char c = in[i];
+            if (escMatch) {
+                if (c == RNSH_ESC[escMatch]) {
+                    if (++escMatch == sizeof(RNSH_ESC) - 1) { quit = true; break; }
+                    continue;                   /* keep withholding */
+                }
+                /* mismatch: flush the withheld prefix, then handle c below */
+                for (size_t k = 0; k < escMatch; k++) fwd[fn++] = RNSH_ESC[k];
+                escMatch = 0;
+                atLineStart = false;
+            }
+            if (atLineStart && c == RNSH_ESC[0]) { escMatch = 1; continue; }
+            fwd[fn++] = c;
+            atLineStart = (c == '\r' || c == '\n');
+        }
+        if (fn > 0) itsSend(ch, fwd, fn, pdMS_TO_TICKS(1000));
+        if (quit) { cliPrintf("\r\nrnsh: disconnected.\r\n"); break; }
     }
     itsDisconnect(ch);
 }

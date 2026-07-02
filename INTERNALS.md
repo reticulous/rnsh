@@ -82,7 +82,10 @@ an accepted Channel to a running command that skips the password.
 3. polls `rnsd.chan.<tag>.state` until `active` (up to ~70 s: a path request
    plus establishment) or `failed` (prints `last_error`); Ctrl-C aborts;
 4. enters the relay loop: `cliReadRaw` operator keystrokes → `itsSend(ch)`;
-   `itsRecv(ch)` remote output → `cliWrite`. **Ctrl-]** (0x1D) quits.
+   `itsRecv(ch)` remote output → `cliWrite`. Typing **`..!`** at the start of a
+   line disconnects — the same line-start escape the ssh client uses (a single
+   control byte like Ctrl-] is a poor fit; the T-Deck keyboard has no `]`). A
+   partial match (`.`/`..`) not completed is forwarded verbatim.
 
 The relay drains the Channel handle itself with `itsRecv` rather than relying on
 the `rnsdChannelOpen` recv callback, because while the command runs the cli task

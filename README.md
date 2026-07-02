@@ -98,13 +98,14 @@ terminal to the remote device CLI.
 ```
 rnsh <dest_hash> [aspect]    open a remote CLI over Reticulum
                              dest_hash = 32 hex chars; aspect defaults to "rnsh"
-                             Ctrl-] to quit
+                             type '..!' on a new line to disconnect
 ```
 
 `rnsh <hash>` requests a path if needed, establishes the Channel, and then
 relays: your keystrokes go out as Channel messages, the remote's output (the
 one collapsed stream, including its `Enter admin password:` prompt) comes back
-and is written to your terminal. Press **Ctrl-]** to disconnect. It runs as a
+and is written to your terminal. Type **`..!`** at the start of a line to
+disconnect (the same escape as the ssh client). It runs as a
 normal CLI command, so it works over serial, the browser terminal, or a nested
 `spangap cli` session.
 
