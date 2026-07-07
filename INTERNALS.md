@@ -11,8 +11,8 @@ inbound Channel to a login-gated `cli` backend.
 
 ## 1. Bring-up
 
-`rnshInit()` (folded into the generated straddle init dispatcher) runs on the
-main task after rns is up. It:
+`RnshService::onInit()` (registered in the generated service registry) runs on
+the main task after rns is up. It:
 
 - writes storage defaults once, gated on `s.rnsh.version`;
 - registers the `rnsh` client command (`cliRegisterCmd("rnsh", cliRnsh)`);

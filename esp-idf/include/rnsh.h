@@ -11,7 +11,12 @@
  */
 #pragma once
 
+#include "service.h"
+
 /** Bring up rnsh: register the `rnsh` client CLI command and spawn the server
  *  task (idle until s.rnsh.server.enabled). Called from the generated straddle
  *  init dispatcher, after rns (rnsd) is up. */
-void rnshInit(void);
+class RnshService : public Service {
+public:
+    void onInit() override;
+};

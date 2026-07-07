@@ -20,12 +20,12 @@ firmware: esp-idf
 platforms: [idf]
 requires:
   - reticulous/rns
-# Auto-init: folded into the generated spangapInitStraddles(). rnshInit()
+# Auto-init: folded into the generated service registry. RnshService::onInit()
 # registers the `rnsh` client CLI command and spawns the server task (which
 # stays idle until s.rnsh.server.enabled flips on). rns brings rnsd up first
 # (dependency order), so the Channel API is available.
-init:
-  - call: rnshInit
+services:
+  - { class: RnshService, header: rnsh.h }
 
 # Declarative settings: LCD pane + storage defaults from one source.
 settings:

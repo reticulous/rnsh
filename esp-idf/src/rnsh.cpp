@@ -362,7 +362,7 @@ void rnshServerTask(void*) {
 
 /* ═══════════════════════════ init ═══════════════════════════ */
 
-void rnshInit(void) {
+void RnshService::onInit() {
     if (storageGetInt("s.rnsh.version", 0) < RNSH_VERSION) {
         storageDefault("s.rnsh.server.enabled", 0);
         storageDefault("s.rnsh.server.color", 0);
