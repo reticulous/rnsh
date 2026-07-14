@@ -364,10 +364,12 @@ void rnshServerTask(void*) {
 
 void RnshService::onInit() {
     if (storageGetInt("s.rnsh.version", 0) < RNSH_VERSION) {
+        storageBegin();
         storageDefault("s.rnsh.server.enabled", 0);
         storageDefault("s.rnsh.server.color", 0);
         storageDefault("s.rnsh.server.announce_interval", 1800);
         storageSet("s.rnsh.version", RNSH_VERSION);
+        storageEnd();
     }
 
     cliRegisterCmd("rnsh", cliRnsh);
