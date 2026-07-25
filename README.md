@@ -27,9 +27,10 @@ microReticulum fork (`rnsdChannelOpen` / `rnsdDestListenChannels`, see
 [rns/INTERNALS.md §5.6](../rns/INTERNALS.md)) and the `cli` login gate that
 [spangap-core](../spangap-core) added (`cli_connect_t.login`). This straddle is
 the wiring that connects the two: a session pump between an accepted Channel and
-a login-gated `cli` backend, plus the client relay command. The wire format is a
-standard RNS Channel, so the reference Python implementation interoperates at the
-Channel layer.
+a login-gated `cli` backend, plus the client relay command. On the wire it
+speaks the **upstream (acehoss) rnsh protocol** (version 1), so both halves
+interoperate with the stock `rnsh` tool in both directions — our server accepts
+a stock client, and our client drives a stock listener.
 
 ---
 
@@ -41,8 +42,11 @@ When enabled, the server:
    `Destination(IN, SINGLE, "rnsh")`, announcing it periodically;
 2. registers for inbound Channels on that destination
    (`rnsdDestListenChannels`);
-3. for each accepted Channel, opens a `cli` backend **with
-   `cli_connect_t.login = 1`** and pumps bytes both ways.
+3. runs the upstream listener handshake per Channel (version exchange, then an
+   `ExecuteCommand`) and opens a `cli` backend **with `cli_connect_t.login = 1`**,
+   relaying the remote's `stdin` stream to it and the cli's output back as
+   `stdout`. Identity is accepted from anyone (the password gate is the auth), so
+   a stock client's identify is honoured but never required.
 
 The login gate is enforced entirely inside `cli` (server-side): the remote sees
 `Enter admin password:` and every byte it sends is consumed by the password
@@ -81,9 +85,14 @@ Then, on the device CLI (`spangap cli "…"` or the serial monitor):
 
 ```
 auth passwd admin <password>     # set the admin password (once) — shared with ssh/web
-set s.rnsh.server.enabled=1       # turn the server on
-show rnsh.server.dest             # the address to give a client
+rnshd enable                      # turn the server on
+rnshd                             # status → 'enabled: <hash>' (the client address)
 ```
+
+`rnshd [enable|disable|announce]` is the operator front-end: no argument prints
+`disabled` or `enabled: <hash>`; `enable`/`disable` are shortcuts for
+`set s.rnsh.server.enabled=…`; `announce` re-announces the destination now
+(otherwise it announces every `s.rnsh.server.announce_interval` seconds).
 
 A remote node then runs `rnsh <that_hash>`, is prompted for the admin password,
 and gets an interactive device CLI.
@@ -101,16 +110,37 @@ rnsh <dest_hash> [aspect]    open a remote CLI over Reticulum
                              type '..!' on a new line to disconnect
 ```
 
-`rnsh <hash>` requests a path if needed, establishes the Channel, and then
-relays: your keystrokes go out as Channel messages, the remote's output (the
-one collapsed stream, including its `Enter admin password:` prompt) comes back
-and is written to your terminal. Type **`..!`** at the start of a line to
-disconnect (the same escape as the ssh client). It runs as a
-normal CLI command, so it works over serial, the browser terminal, or a nested
-`spangap cli` session.
+`rnsh <hash>` requests a path if needed, establishes the Channel, does the
+version handshake and sends an `ExecuteCommand`, then relays: your keystrokes go
+out as the `stdin` stream, the remote's `stdout`/`stderr` streams (including its
+`Enter admin password:` prompt) come back and are written to your terminal. It
+identifies with the device's rnsh identity, so a stock listener that gates on
+allowed identities (`-a <hash>`) can admit it. Type **`..!`** at the start of a
+line to disconnect (the same escape as the ssh client). It runs as a normal CLI
+command, so it works over serial, the browser terminal, or a nested `spangap
+cli` session.
 
 There is no client-side configuration or key — the remote authenticates you via
 its own admin-password gate.
+
+---
+
+## Interop with the stock rnsh
+
+Because rnsh is wire-compatible with the upstream (acehoss) `rnsh` tool, either
+half can be exercised against a reference Reticulum stack (install one so `rnsh`
+and `rnsd` are on PATH):
+
+- **Reference client → device server:** `rnshd enable` on the device, note the
+  hash, then `rnsh <device_hash>` on the reference host — you get the admin
+  password prompt and an interactive device CLI.
+- **Device client → reference listener:** run `rnsh -l -A -- /bin/bash` on the
+  reference host (it prints its destination), then `rnsh <that_hash>` on the
+  device.
+
+Both directions also work device-to-device. The codec is verified byte-exact
+against the reference; see [INTERNALS.md §7](INTERNALS.md) for the full test
+matrix and status.
 
 ---
 
@@ -139,4 +169,4 @@ and no browser UI for the client.
 ## Read next
 
 - [INTERNALS.md](INTERNALS.md) — the session pump, the login handoff, the
-  Channel framing, and the pitfalls.
+  client relay, the upstream wire protocol, and the pitfalls.
