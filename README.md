@@ -74,7 +74,7 @@ login flows).
 Include the straddle in a build (it requires [rns](../rns)):
 
 ```
-spangap build reticulous/reticulous --with spangap/hw-tdeck --with reticulous/rnsh
+spangap build reticulous/reticulous --with spangap/hw-lilygo-tdeck --with reticulous/rnsh
 ```
 
 Then, on the device CLI (`spangap cli "…"` or the serial monitor):

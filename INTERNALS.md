@@ -131,4 +131,4 @@ carrying the raw bytes), so a stock RNS `Channel` with a matching `MessageBase`
 interoperates — which is how a reference Python client/server (a stock
 `RNS.Channel` with a `MessageBase` whose `MSGTYPE = 0x0100` packs/unpacks the
 raw bytes) can drive the device in testing, in the shape of the peers under
-`hw-tdeck/tests/peers/`.
+`hw-lilygo-tdeck/tests/peers/`.
