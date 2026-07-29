@@ -410,6 +410,8 @@ struct rnsh_session_t {
 PSRAM_BSS rnsh_session_t s_sessions[RNSH_MAX_SESSIONS];
 
 TaskHandle_t     s_serverTask = nullptr;
+volatile bool    s_parked = false;     /* true while parked (stopped); rnshStop waits on it */
+volatile bool    s_stop = false;       /* rns stop → break the work loop and park */
 int              s_destHandle = -1;    /* hosted rnsh destination (rnsdDestOpen) */
 volatile bool    s_announceRequest = false;   /* set by `rnshd announce`, served on the task */
 
@@ -652,16 +654,23 @@ void rnshServerTask(void*) {
     itsServerOnRecv(RNSH_INBOX_PORT, onInboxRecv);
     itsServerOnDisconnect(RNSH_INBOX_PORT, onInboxDisconnect);
 
-    /* Wait for the RNS universe to come up before hosting a destination. */
-    while (storageGetInt("rns.ready", 0) == 0) vTaskDelay(pdMS_TO_TICKS(500));
-
+  for (;;) {   /* Park, don't delete: this task lives across rns stop/start, so its
+                * ITS server ports + client slots are reused, not leaked. */
     TickType_t nextAnnounce = 0;
-    for (;;) {
+    /* (Re-)bring-up on entry and on resume: if server mode is enabled, re-host
+     * the rnsh destination now. Teardown left s_destHandle == -1, so this re-opens
+     * it (and re-listens for channels); the enable-reconcile in the loop then
+     * handles any later toggle. */
+    if (storageGetInt("s.rnsh.server.enabled", 0) != 0 && s_destHandle < 0)
+        serverOpen();
+    while (!s_stop) {
         /* Poll fast while any session has stdout pending, so the idle/max flush
-         * timer fires on time; otherwise idle at 1 Hz. */
+         * timer fires on time; otherwise idle at 0.2 Hz. Inbound session bytes and
+         * new-session connects are ITS notifies, so input latency is unaffected;
+         * this only bounds housekeeping (announce scheduling is wall-clock). */
         bool pending = false;
         for (auto& s : s_sessions) if (s.used && s.outn > 0) { pending = true; break; }
-        itsPoll(pdMS_TO_TICKS(pending ? 50 : 1000));
+        itsPoll(pdMS_TO_TICKS(pending ? 50 : 5000));
 
         /* Flush coalesced stdout: 250 ms idle, or 1.5 s since the first byte. */
         TickType_t now = xTaskGetTickCount();
@@ -688,7 +697,19 @@ void rnshServerTask(void*) {
         } else {
             s_announceRequest = false;   /* drop stale requests while disabled */
         }
-    }
+    }   /* end while(!s_stop) */
+
+    /* rns stop: TEARDOWN — close the hosted destination and any live session (each
+     * holds a CLI-backend + inbox ITS handle). serverClose disconnects the dest ITS
+     * handle so rnsd frees its RNSD_PORT_DEST slot, and tears down each session's
+     * backend/inbox handles. Keep the ITS server ports for the next start. Then
+     * PARK on the inbox until rnshStart() clears s_stop and notifies. */
+    if (s_destHandle >= 0) serverClose();
+    s_parked = true;
+    info("[%s] stopped", TAG);
+    while (s_stop) itsPoll(portMAX_DELAY);
+    s_parked = false;
+  }
 }
 
 } // namespace
@@ -740,6 +761,23 @@ static void cliRnshd(const char* args) {
 
 /* ═══════════════════════════ init ═══════════════════════════ */
 
+/* ── RNS lifecycle hooks (registered with the orchestrator; see rnsServiceRegister) ── */
+static void rnshStart(void) {
+    s_stop = false;
+    if (!s_serverTask)
+        s_serverTask = spawnTask(rnshServerTask, TAG, 8192, nullptr, 3, 0, STACK_PSRAM);
+    else
+        xTaskNotifyGive(s_serverTask);   /* un-park the resident task */
+}
+
+static void rnshStop(void) {
+    if (!s_serverTask || s_stop) return;
+    s_stop = true;
+    xTaskNotifyGive(s_serverTask);   /* break the work loop; the task parks, not deleted */
+    for (int i = 0; i < 300 && !s_parked; i++) delay(10);   /* await park */
+    if (!s_parked) warn("[%s] stop timed out", TAG);
+}
+
 void RnshService::onInit() {
     if (storageGetInt("s.rnsh.version", 0) < RNSH_VERSION) {
         storageBegin();
@@ -757,5 +795,8 @@ void RnshService::onInit() {
     cliRegisterCmd("rnsh", cliRnsh);
     cliRegisterCmd("rnshd", cliRnshd);
 
-    s_serverTask = spawnTask(rnshServerTask, TAG, 8192, nullptr, 3, 0, STACK_PSRAM);
+    /* Register with the RNS orchestrator instead of self-spawning: rnsStart()
+     * calls rnshStart() (which spawns rnshServerTask) once rnsd is up and past its
+     * boot window, and rnsStop() calls rnshStop(). */
+    rnsServiceRegister(TAG, rnshStart, rnshStop);
 }
