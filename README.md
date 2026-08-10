@@ -89,7 +89,7 @@ rnshd enable                      # turn the server on
 rnshd                             # status → 'enabled: <hash>' (the client address)
 ```
 
-`rnshd [enable|disable|announce]` is the operator front-end: no argument prints
+`rnshd [enable|disable|a[nnounce]]` is the operator front-end: no argument prints
 `disabled` or `enabled: <hash>`; `enable`/`disable` are shortcuts for
 `set s.rnsh.server.enabled=…`; `announce` re-announces the destination now
 (otherwise it announces every `s.rnsh.server.announce_interval` seconds).

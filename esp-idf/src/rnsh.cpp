@@ -46,6 +46,8 @@
 #include <cstdio>
 #include <string>
 
+
+
 static const char* TAG = "rnsh";
 
 #define RNSH_VERSION        1
@@ -720,11 +722,11 @@ void rnshServerTask(void*) {
  * shortcuts for `set s.rnsh.server.enabled`; announce sends one now. */
 static void cliRnshd(const char* args) {
     if (cliWantsHelp(args)) {
-        cliPrintf("rnshd [enable|disable|announce]   rnsh server control\n");
+        cliPrintf("rnshd [enable|disable|a[nnounce]]  rnsh server control\n");
         cliPrintf("                                  (no arg) show status\n");
         cliPrintf("      enable     turn the server on  (s.rnsh.server.enabled=1)\n");
         cliPrintf("      disable    turn the server off (s.rnsh.server.enabled=0)\n");
-        cliPrintf("      announce   send a destination announce now\n");
+        cliPrintf("      a[nnounce] send a destination announce now\n");
         return;
     }
 
@@ -750,7 +752,7 @@ static void cliRnshd(const char* args) {
     } else if (strcmp(sub, "disable") == 0) {
         storageSet("s.rnsh.server.enabled", 0);
         cliPrintf("rnshd: disabled\n");
-    } else if (strcmp(sub, "announce") == 0) {
+    } else if (cliVerbIs(sub, "announce", 1)) {
         if (storageGetInt("s.rnsh.server.enabled", 0) == 0) { cliPrintf("rnshd: server disabled\n"); return; }
         s_announceRequest = true;
         cliPrintf("rnshd: announce requested\n");
