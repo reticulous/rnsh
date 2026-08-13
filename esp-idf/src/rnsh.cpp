@@ -767,7 +767,7 @@ static void cliRnshd(const char* args) {
 static void rnshStart(void) {
     s_stop = false;
     if (!s_serverTask)
-        s_serverTask = spawnTask(rnshServerTask, TAG, 8192, nullptr, 3, 0, STACK_PSRAM);
+        s_serverTask = spawnTask(rnshServerTask, TAG, 8192, nullptr, 1, 0, STACK_PSRAM);
     else
         xTaskNotifyGive(s_serverTask);   /* un-park the resident task */
 }

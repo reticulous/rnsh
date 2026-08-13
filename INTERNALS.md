@@ -20,7 +20,7 @@ the main task after rns is up. It:
   can identify and the server host under it, whichever runs first;
 - registers the `rnsh` client command and the `rnshd` server-control command
   (`cliRegisterCmd`);
-- spawns `rnshServerTask` (8 KB PSRAM stack, prio 3).
+- spawns `rnshServerTask` (8 KB PSRAM stack, prio 1).
 
 `rnshd [enable|disable|announce]` is a thin operator front-end on the cli task:
 no arg prints `disabled` or `enabled: <hash>` (the destination hash, computed
