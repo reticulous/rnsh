@@ -146,9 +146,10 @@ matrix and status.
 
 ## Browser
 
-The server contributes a generated settings pane (Settings → Remote shell) from
-this straddle's `settings:` block — the enable switch, server color, announce
-interval, and the read-only server address. There is no hand-written Vue panel
+The server contributes a generated settings pane (Settings → Reticulum Mesh →
+Remote shell) from this straddle's `settings:` block — the enable switch, server
+color, announce interval, and the read-only server address. There is no
+hand-written Vue panel
 and no browser UI for the client.
 
 ## Dependencies

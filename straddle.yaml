@@ -30,7 +30,7 @@ services:
 # Declarative settings: both surfaces + storage defaults from one source.
 settings:
   - at:
-      - { id: mesh, label: "Mesh Network", short: "Mesh", order: 3 }
+      - { id: reticulum }
       - { id: rnsh, label: "Remote shell", short: "rnsh" }
     rows:
       - section: "Reticulum shell (rnsh)"
