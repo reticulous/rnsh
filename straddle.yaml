@@ -27,12 +27,11 @@ requires:
 services:
   - { class: RnshService, header: rnsh.h }
 
-# Declarative settings: LCD pane + storage defaults from one source.
+# Declarative settings: both surfaces + storage defaults from one source.
 settings:
-  - menu:
-      - { id: mesh, label: "Mesh Network", placement: 3 }
-      - { id: rnsh, label: "Remote shell" }
-    web: false
+  - at:
+      - { id: mesh, label: "Mesh Network", short: "Mesh", order: 3 }
+      - { id: rnsh, label: "Remote shell", short: "rnsh" }
     rows:
       - section: "Reticulum shell (rnsh)"
       - switch: { label: "Server enabled", key: "s.rnsh.server.enabled", default: 0 }
