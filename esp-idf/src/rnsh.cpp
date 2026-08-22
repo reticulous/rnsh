@@ -416,6 +416,15 @@ volatile bool    s_parked = false;     /* true while parked (stopped); rnshStop 
 volatile bool    s_stop = false;       /* rns stop → break the work loop and park */
 int              s_destHandle = -1;    /* hosted rnsh destination (rnsdDestOpen) */
 volatile bool    s_announceRequest = false;   /* set by `rnshd announce`, served on the task */
+/* s.rnsh.server.enabled changed: re-read it on the next pass. Set from the
+ * storage subscription, which runs on the server task. */
+static volatile bool s_enableDirty = false;
+/* The last value read. Cached rather than re-read per pass so the wait below can
+ * tell "off, nothing to do, park" from "on but not hosting yet, retry". */
+static bool s_serverWanted = false;
+/* How often serverOpen() is retried while the switch is on but the destination
+ * failed to open — rnsd not up yet, or out of dest slots. */
+#define RNSH_OPEN_RETRY_MS 30000
 
 rnsh_session_t* sessByInbox(int h) {
     for (auto& s : s_sessions) if (s.used && s.inboxHandle == h) return &s;
@@ -656,6 +665,13 @@ void rnshServerTask(void*) {
     itsServerOnRecv(RNSH_INBOX_PORT, onInboxRecv);
     itsServerOnDisconnect(RNSH_INBOX_PORT, onInboxDisconnect);
 
+    /* The enable switch is watched, not polled. Subscriptions fire on the
+     * subscribing task's own stack, so the toggle both flags the reconcile and
+     * wakes the wait below — which is what lets that wait be as long as the
+     * announce interval, or infinite while the server is off. */
+    storageSubscribeChanges("s.rnsh.server.enabled",
+                            ON_CHANGE { (void)key; (void)val; s_enableDirty = true; });
+
   for (;;) {   /* Park, don't delete: this task lives across rns stop/start, so its
                 * ITS server ports + client slots are reused, not leaked. */
     TickType_t nextAnnounce = 0;
@@ -663,16 +679,31 @@ void rnshServerTask(void*) {
      * the rnsh destination now. Teardown left s_destHandle == -1, so this re-opens
      * it (and re-listens for channels); the enable-reconcile in the loop then
      * handles any later toggle. */
-    if (storageGetInt("s.rnsh.server.enabled", 0) != 0 && s_destHandle < 0)
-        serverOpen();
+    s_serverWanted = storageGetInt("s.rnsh.server.enabled", 0) != 0;
+    if (s_serverWanted && s_destHandle < 0) serverOpen();
     while (!s_stop) {
-        /* Poll fast while any session has stdout pending, so the idle/max flush
-         * timer fires on time; otherwise idle at 0.2 Hz. Inbound session bytes and
-         * new-session connects are ITS notifies, so input latency is unaffected;
-         * this only bounds housekeeping (announce scheduling is wall-clock). */
+        /* Wait for the next thing that is actually due. Fast (50 ms) while any
+         * session has stdout pending, so the idle/max flush timer fires on time.
+         * Otherwise the only standing duty is the announce, half an hour out —
+         * so sleep to its deadline, and forever while the server is off, when
+         * there is no duty at all. Nothing is lost to the long wait: inbound
+         * session bytes and new-session connects are ITS notifies, the enable
+         * switch is a storage subscription on this task, and `rnshd announce`
+         * notifies us. rnsh therefore costs an idle node nothing. */
         bool pending = false;
         for (auto& s : s_sessions) if (s.used && s.outn > 0) { pending = true; break; }
-        itsPoll(pdMS_TO_TICKS(pending ? 50 : 5000));
+        TickType_t wait;
+        if (pending) {
+            wait = pdMS_TO_TICKS(50);
+        } else if (s_destHandle >= 0) {
+            int32_t rem = (int32_t)(nextAnnounce - xTaskGetTickCount());
+            wait = rem > 0 ? (TickType_t)rem : 0;
+        } else if (s_serverWanted) {
+            wait = pdMS_TO_TICKS(RNSH_OPEN_RETRY_MS);   /* on, but the dest didn't open */
+        } else {
+            wait = portMAX_DELAY;
+        }
+        itsPoll(wait);
 
         /* Flush coalesced stdout: 250 ms idle, or 1.5 s since the first byte. */
         TickType_t now = xTaskGetTickCount();
@@ -683,9 +714,12 @@ void rnshServerTask(void*) {
                 flushStdout(s);
         }
 
-        bool en = storageGetInt("s.rnsh.server.enabled", 0) != 0;
-        if (en && s_destHandle < 0) { serverOpen(); nextAnnounce = 0; }
-        else if (!en && s_destHandle >= 0) { serverClose(); }
+        if (s_enableDirty) {
+            s_enableDirty = false;
+            s_serverWanted = storageGetInt("s.rnsh.server.enabled", 0) != 0;
+        }
+        if (s_serverWanted && s_destHandle < 0) { serverOpen(); nextAnnounce = 0; }
+        else if (!s_serverWanted && s_destHandle >= 0) { serverClose(); }
 
         if (s_destHandle >= 0) {
             if (s_announceRequest) { s_announceRequest = false; serverAnnounce(); }
@@ -747,7 +781,7 @@ static void cliRnshd(const char* args) {
     }
 
     if (strcmp(sub, "enable") == 0) {
-        storageSet("s.rnsh.server.enabled", 1);   /* server task reconciles within ~1 s */
+        storageSet("s.rnsh.server.enabled", 1);   /* the server task's subscription reconciles at once */
         cliPrintf("rnshd: enabled\n");
     } else if (strcmp(sub, "disable") == 0) {
         storageSet("s.rnsh.server.enabled", 0);
@@ -755,6 +789,7 @@ static void cliRnshd(const char* args) {
     } else if (cliVerbIs(sub, "announce", 1)) {
         if (storageGetInt("s.rnsh.server.enabled", 0) == 0) { cliPrintf("rnshd: server disabled\n"); return; }
         s_announceRequest = true;
+        if (s_serverTask) xTaskNotifyGive(s_serverTask);   /* the server task sleeps to its announce deadline */
         cliPrintf("rnshd: announce requested\n");
     } else {
         cliPrintf("usage: rnshd [enable|disable|announce]\n");

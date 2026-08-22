@@ -88,9 +88,15 @@ required.
 
 The bytes are copied through PSRAM statics on the 8 KB server task (`bbuf`,
 `frame`, `rxbuf`, plus a 16 KB `decomp` bound by `RawChannelWriter.MAX_CHUNK_LEN`
-for compressed inbound chunks). The task loop polls at 1 Hz when idle, but drops
-to 50 ms whenever a session has stdout pending, so the coalescing flush timer
-fires on schedule; it also serves the `rnshd announce` request flag there.
+for compressed inbound chunks). The task loop waits for the next thing actually
+due: 50 ms whenever a session has stdout pending, so the coalescing flush timer
+fires on schedule; otherwise the announce deadline, half an hour out; and
+forever while the server is off, when there is no standing duty at all. Nothing
+is lost to the long wait — inbound bytes and new-session connects are ITS
+notifies, `s.rnsh.server.enabled` is a storage subscription firing on this task,
+and `rnshd announce` notifies — so rnsh costs an idle node nothing. Where the
+switch is on but the destination would not open (rnsd not up, or no dest slots),
+the wait is `RNSH_OPEN_RETRY_MS` instead, since that retry answers to no event.
 
 ## 3. Login handoff
 
