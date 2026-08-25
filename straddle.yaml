@@ -36,6 +36,6 @@ settings:
       - section: "Reticulum shell (rnsh)"
       - switch: { label: "Server enabled", key: "s.rnsh.server.enabled", default: 0 }
       - switch: { label: "Server color", key: "s.rnsh.server.color", default: 0 }
-      - slider: { label: "Announce (s)", key: "s.rnsh.server.announce_interval", min: 0, max: 21600, default: 1800 }
+      - integer: { label: "Announce", unit: "s", key: "s.rnsh.server.announce_interval", min: 0, max: 21600, default: 1800 }
       - value:  { label: "Server address", key: "rnsh.server.dest" }
       - caption: "The server exposes this device's CLI over Reticulum. Access requires the admin password (set with `passwd`)."
