@@ -69,7 +69,6 @@ login flows).
 | --- | --- | --- |
 | `s.rnsh.server.enabled` | `0` | Master switch. Live (no reboot) — the server task reconciles within ~1 s, opening/closing the hosted destination. Owned by this straddle's `settings:` block. |
 | `s.rnsh.server.color` | `0` | Pass `CLI_COLOR`/`CLI_NO_COLOR` to the cli backend (off → clean text for a scripted client). |
-| `s.rnsh.server.announce_interval` | `1800` | Seconds between destination announces (`0` treated as default). |
 | `secrets.rnsh.identity` | (generated when first enabled) | 128-hex private key of the server's `rnsh` destination identity. |
 | `rnsh.server.dest` | (published) | Runtime: the server's 16-byte destination hash (hex) — hand this to a client. Empty when the server is off. |
 
@@ -92,7 +91,9 @@ rnshd                             # status → 'enabled: <hash>' (the client add
 `rnshd [enable|disable|a[nnounce]]` is the operator front-end: no argument prints
 `disabled` or `enabled: <hash>`; `enable`/`disable` are shortcuts for
 `set s.rnsh.server.enabled=…`; `announce` re-announces the destination now
-(otherwise it announces every `s.rnsh.server.announce_interval` seconds).
+(otherwise it announces once when the server opens, and each interface decides
+how often that goes back on the air — see [rns/README.md](../rns/README.md),
+"The announce beat").
 
 A remote node then runs `rnsh <that_hash>`, is prompted for the admin password,
 and gets an interactive device CLI.
@@ -148,8 +149,7 @@ matrix and status.
 
 The server contributes a generated settings pane (Settings → Reticulum Mesh →
 Remote shell) from this straddle's `settings:` block — the enable switch, server
-color, announce interval, and the read-only server address. There is no
-hand-written Vue panel
+color, and the read-only server address. There is no hand-written Vue panel
 and no browser UI for the client.
 
 ## Dependencies

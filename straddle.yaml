@@ -36,6 +36,8 @@ settings:
       - section: "Reticulum shell (rnsh)"
       - switch: { label: "Server enabled", key: "s.rnsh.server.enabled", default: 0 }
       - switch: { label: "Server color", key: "s.rnsh.server.color", default: 0 }
-      - integer: { label: "Announce", unit: "s", key: "s.rnsh.server.announce_interval", min: 0, max: 21600, default: 1800 }
+      # No announce interval here: rnsh announces its address once when the
+      # server opens, and how often that goes back on the air belongs to each
+      # interface's own pane.
       - value:  { label: "Server address", key: "rnsh.server.dest" }
       - caption: "The server exposes this device's CLI over Reticulum. Access requires the admin password (set with `passwd`)."

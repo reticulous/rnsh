@@ -674,7 +674,7 @@ void rnshServerTask(void*) {
 
   for (;;) {   /* Park, don't delete: this task lives across rns stop/start, so its
                 * ITS server ports + client slots are reused, not leaked. */
-    TickType_t nextAnnounce = 0;
+    bool announced = false;   /* the one-shot announce, per bring-up */
     /* (Re-)bring-up on entry and on resume: if server mode is enabled, re-host
      * the rnsh destination now. Teardown left s_destHandle == -1, so this re-opens
      * it (and re-listens for channels); the enable-reconcile in the loop then
@@ -684,20 +684,19 @@ void rnshServerTask(void*) {
     while (!s_stop) {
         /* Wait for the next thing that is actually due. Fast (50 ms) while any
          * session has stdout pending, so the idle/max flush timer fires on time.
-         * Otherwise the only standing duty is the announce, half an hour out —
-         * so sleep to its deadline, and forever while the server is off, when
-         * there is no duty at all. Nothing is lost to the long wait: inbound
-         * session bytes and new-session connects are ITS notifies, the enable
-         * switch is a storage subscription on this task, and `rnshd announce`
-         * notifies us. rnsh therefore costs an idle node nothing. */
+         * Otherwise there is NO standing duty at all — the announce is a
+         * one-shot, and repeating it on the air is each interface's business —
+         * so the wait is unbounded. Nothing is lost to it: inbound session
+         * bytes and new-session connects are ITS notifies, the enable switch is
+         * a storage subscription on this task, and `rnshd announce` notifies
+         * us. rnsh therefore costs an idle node nothing. */
         bool pending = false;
         for (auto& s : s_sessions) if (s.used && s.outn > 0) { pending = true; break; }
         TickType_t wait;
         if (pending) {
             wait = pdMS_TO_TICKS(50);
         } else if (s_destHandle >= 0) {
-            int32_t rem = (int32_t)(nextAnnounce - xTaskGetTickCount());
-            wait = rem > 0 ? (TickType_t)rem : 0;
+            wait = portMAX_DELAY;
         } else if (s_serverWanted) {
             wait = pdMS_TO_TICKS(RNSH_OPEN_RETRY_MS);   /* on, but the dest didn't open */
         } else {
@@ -718,18 +717,16 @@ void rnshServerTask(void*) {
             s_enableDirty = false;
             s_serverWanted = storageGetInt("s.rnsh.server.enabled", 0) != 0;
         }
-        if (s_serverWanted && s_destHandle < 0) { serverOpen(); nextAnnounce = 0; }
+        if (s_serverWanted && s_destHandle < 0) { serverOpen(); announced = false; }
         else if (!s_serverWanted && s_destHandle >= 0) { serverClose(); }
 
         if (s_destHandle >= 0) {
             if (s_announceRequest) { s_announceRequest = false; serverAnnounce(); }
-            now = xTaskGetTickCount();
-            if (nextAnnounce == 0 || (int32_t)(now - nextAnnounce) >= 0) {
-                serverAnnounce();
-                int iv = storageGetInt("s.rnsh.server.announce_interval", 1800);
-                if (iv <= 0) iv = 1800;
-                nextAnnounce = now + pdMS_TO_TICKS(iv * 1000);
-            }
+            /* Once, when the destination opens. rnsh's job is to keep its
+             * stored announce current with rnsd, not to schedule anything: how
+             * often those bytes go on the air belongs to each interface (see
+             * rnsd.h, "the announce beat"). */
+            if (!announced) { announced = true; serverAnnounce(); }
         } else {
             s_announceRequest = false;   /* drop stale requests while disabled */
         }
@@ -820,7 +817,6 @@ void RnshService::onInit() {
         storageBegin();
         storageDefault("s.rnsh.server.enabled", 0);
         storageDefault("s.rnsh.server.color", 0);
-        storageDefault("s.rnsh.server.announce_interval", 1800);
         storageSet("s.rnsh.version", RNSH_VERSION);
         storageEnd();
     }
