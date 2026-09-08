@@ -6,8 +6,9 @@
 #     CLI session over it (the remote's stdout+stderr arrive collapsed into the
 #     one Channel stream).
 #   * server — a daemon that hosts the `rnsh` destination aspect, accepts an
-#     incoming Channel, and bridges it to the device CLI with the admin-password
-#     login gate forced on (cli_connect_t.login). Default off.
+#     incoming Channel, and bridges it to the device CLI behind the
+#     admin-password login gate (cli_connect_t.login), except for the identities
+#     listed in s.rnsh.server.allowed, which are admitted without one. Default off.
 #
 # Rides on rns's Channel API (rnsdChannelOpen / rnsdDestListenChannels); the
 # Link is end-to-end encrypted and authenticated by Reticulum, so rnsh adds no
@@ -35,9 +36,35 @@ settings:
     rows:
       - section: "Reticulum shell (rnsh)"
       - switch: { label: "Server enabled", key: "s.rnsh.server.enabled", default: 0 }
-      - switch: { label: "Server color", key: "s.rnsh.server.color", default: 0 }
+      - switch: { label: "Show ANSI colors", key: "s.rnsh.server.color", default: 0 }
+      - caption: "Only ever sent to a peer that says it is a colour terminal — a one-shot command, a piped stdout or a dumb terminal gets plain text either way."
       # No announce interval here: rnsh announces its address once when the
       # server opens, and how often that goes back on the air belongs to each
       # interface's own pane.
       - value:  { label: "Server address", key: "rnsh.server.dest" }
-      - caption: "The server exposes this device's CLI over Reticulum. Access requires the admin password (set with `passwd`)."
+      # This device's own identity — what a remote node adds to its allowed list
+      # to let our client in without a password. Not the server address.
+      - value:  { label: "Our identity", key: "rnsh.identity" }
+      - caption: "The server exposes this device's CLI over Reticulum. A peer that isn't on the list below must give the admin password (set with `passwd`)."
+      - switch: { label: "Password login", key: "s.rnsh.server.password", default: 1 }
+      - caption: "Off, only the identities below get in — everyone else is refused at connect."
+      # The allowed list is an array of per-field objects; rnsh.cpp owns every
+      # mutation through the rnsh.peer.* sentinels and validates there, so a
+      # malformed hash comes back as a sentence rather than as a UI rule.
+      - list:
+          label: "Passwordless identities"
+          key: s.rnsh.server.allowed
+          id: id
+          item: "{label}"
+          subtitle: "{hash}"
+          empty: "No identities — every peer meets the password gate."
+          cmd: rnsh.peer
+          add:
+            - label: "Allow identity"
+              form:
+                title: "Allow identity"
+                submit: "Allow"
+                fields:
+                  - text: { label: "Identity hash", field: hash, placeholder: "32 hex characters" }
+                  - text: { label: "Label", field: label, placeholder: "optional" }
+          remove: { confirm: "Remove {label}?" }

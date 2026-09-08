@@ -17,16 +17,23 @@ the main task after rns is up. It:
 
 - writes storage defaults once, gated on `s.rnsh.version`;
 - generates the rnsh identity (`RNSH_IDENTITY_KEY`, idempotent) so the client
-  can identify and the server host under it, whichever runs first;
+  can identify and the server host under it, whichever runs first, and publishes
+  its hash to `rnsh.identity` — the value a remote node allows to let us in;
+- subscribes the `rnsh.peer.*` list sentinels (§3), `onStorageTask` so they work
+  with the server task idle or absent;
 - registers the `rnsh` client command and the `rnshd` server-control command
   (`cliRegisterCmd`);
 - spawns `rnshServerTask` (8 KB PSRAM stack, prio 1).
 
-`rnshd [enable|disable|announce]` is a thin operator front-end on the cli task:
-no arg prints `disabled` or `enabled: <hash>` (the destination hash, computed
-from the rnsh identity); `enable`/`disable` just write `s.rnsh.server.enabled`
-(the server task reconciles within ~1 s); `announce` sets a `volatile` request
-flag the server task serves on its next loop.
+`rnshd [enable|disable|announce|allowed|allow|deny|password]` is a thin operator
+front-end on the cli task: no arg prints the status block (destination hash,
+`rnsh.identity`, password policy, allowed count); `enable`/`disable` just write
+`s.rnsh.server.enabled` (the server task reconciles within ~1 s); `announce` sets
+a `volatile` request flag the server task serves on its next loop;
+`allowed`/`allow`/`deny` call the same store functions the sentinels do, and
+`password` writes `s.rnsh.server.password`. Nothing here touches the server
+task's state — admission is read fresh per session, so an edit takes effect on
+the next connect and never disturbs a live one.
 
 The server task always exists; it stays idle until `s.rnsh.server.enabled` is
 on. It is both an ITS **server** (its inbox port for forwarded Channels) and an
@@ -41,28 +48,33 @@ When a remote establishes a Link+Channel to the destination, rnsd forwards it as
 a fresh ITS connection to `RNSH_INBOX_PORT` carrying an `rnsd_link_incoming_t`.
 
 Each session is a slot in a fixed `s_sessions[RNSH_MAX_SESSIONS]` (2) array
-holding `{state, inboxHandle, backendHandle}`. It runs the upstream listener
-state machine (session.py's `LSState`): **WAIT_VERS → WAIT_CMD → RUNNING**. We
-skip WAIT_IDENT — identity is accepted from anyone (allow-all); the password
-gate (§3) is the authentication — so a client's identify is honoured but never
-required.
+holding `{state, inboxHandle, backendHandle, tag, peer}`. It runs the upstream
+listener state machine (session.py's `LSState`): **WAIT_VERS → WAIT_CMD →
+RUNNING**. We skip WAIT_IDENT as a *state* — there is nothing to wait for,
+because the identify rides the Link and not the Channel — but the identity it
+carries is read at `ExecuteCommand` and decides admission (§3).
 
-- **`onInboxConnect`** — a Channel arrived. Allocate a slot in `WAIT_VERS`. The
-  CLI backend is **not** opened yet.
+- **`onInboxConnect`** — a Channel arrived. Allocate a slot in `WAIT_VERS` and
+  keep rnsd's `tag` out of the `rnsd_link_incoming_t` (it names the channel's
+  state tree, which is where the peer's identity will appear). The CLI backend
+  is **not** opened yet.
 - **`onInboxRecv`** (remote → session): drain framed messages and dispatch on
   the envelope msgtype (see §6):
   - `WAIT_VERS`: on `VersionInfo` reply with our own `VersionInfo`, advance to
     `WAIT_CMD`.
-  - `WAIT_CMD`: on `ExecuteCommand` open the CLI backend **with the login gate
-    forced on** (the payload is ignored — the device runs its one "command", the
-    cli), advance to `RUNNING`:
+  - `WAIT_CMD`: on `ExecuteCommand` settle admission (§3) and the colour policy
+    (§3a), open the CLI backend accordingly, advance to `RUNNING`:
 
     ```c
-    cli_connect_t cc = { CLI_ANSI, /*from_usb_serial*/0, color, /*no_prompt*/0, /*login*/1 };
+    cli_connect_t cc = { CLI_ANSI, /*from_usb_serial*/0, color, /*no_prompt*/0,
+                         /*login*/ trusted ? 0 : 1 };
     itsConnect("cli", CLI_PORT_TCP, &cc, sizeof(cc), …, /*ref*/i, onBackendRecv, onBackendDisc);
     ```
 
-    That `login = 1` is the entire authentication story — see §3.
+    The `cmdline` the peer sent is **not** run — the device has one "command",
+    its cli — but the payload is no longer discarded: `decodeExec` reads
+    `cmdline`, `pipe_stdout` and `term` out of it, which is where the colour
+    decision comes from.
   - `RUNNING`: a `StreamData(stdin)` frame → decompress if flagged → `itsSend`
     its bytes to the backend (the remote's password, then its keystrokes). A
     frame with the **stdin-EOF** flag (a stock client whose stdin pipe closed —
@@ -98,9 +110,50 @@ and `rnshd announce` notifies — so rnsh costs an idle node nothing. Where the
 switch is on but the destination would not open (rnsd not up, or no dest slots),
 the wait is `RNSH_OPEN_RETRY_MS` instead, since that retry answers to no event.
 
-## 3. Login handoff
+## 3. Admission, and the login handoff
 
-rnsh does **not** call `authLogin` itself. It sets `cli_connect_t.login = 1` and
+Admission is decided **once**, in the `WAIT_CMD` → `RUNNING` transition, and
+never revisited:
+
+```
+peer = rnsd.chan.<tag>.remote_identity        (32-hex, or "" — nobody identified)
+trusted = peer in s.rnsh.server.allowed[].hash
+    trusted                                → cli backend, login = 0
+    !trusted && s.rnsh.server.password      → cli backend, login = 1
+    !trusted && !s.rnsh.server.password     → ErrorMessage("identity not allowed"), close
+```
+
+**Why the identity comes from storage and not from the connect payload.** rnsd
+forwards an inbound Channel the instant its Link is established, which is
+*before* the initiator's LINKIDENTIFY packet arrives — so
+`rnsd_link_incoming_t.remote_identity_hash` is normally still zero and caching it
+at connect would trust nobody, ever. rnsd wires
+`set_remote_identified_callback` on the inbound channel Link (rns,
+`onChanRemoteIdentifiedCb`) and publishes the verified hash to
+`rnsd.chan.<tag>.remote_identity`; rnsh re-reads that key at `ExecuteCommand`,
+two round-trips later, by which time it has landed. µR validates the identify
+signature before firing the callback, so what rnsh compares is proof, not a
+claim — nothing in the rnsh protocol itself can assert an identity.
+
+The list is a bypass, not a gate: it is checked first, so a listed identity is
+admitted whether or not an admin password has ever been set. `password off` with
+an empty list is a server nobody can enter, which is the honest reading of what
+was asked for and is reported by `rnshd` status.
+
+The store is `s.rnsh.server.allowed[]` — `{ id, hash, label }` per item, the
+sshd `authorized_keys` shape: `hash` is compared, `label` is the finished row
+text, `id` is a small opaque number so a sentinel can name an item without
+carrying the hash or an index that the next removal invalidates. Every mutation
+arrives on `rnsh.peer.add` / `rnsh.peer.remove` and is validated in `rnsh.cpp`,
+which answers on `rnsh.peer.error` / `rnsh.peer.done` — the CLI's `rnshd allow` /
+`rnshd deny` go through the same functions, so there is one validator and one
+writer. The sentinels are subscribed `onStorageTask` because the list is edited
+from the browser or the display, not from the server task's loop; the handler
+clears its own sentinel, and the leading empty-value guard is what stops that
+write from recursing.
+
+For an unlisted peer that does get the prompt, rnsh does **not** call
+`authLogin` itself. It sets `cli_connect_t.login = 1` and
 lets `cli` enforce the gate server-side (spangap-core `cli.cpp`): on a
 login-required slot the CLI prints `Enter admin password:`, routes every
 received byte into a masked password accumulator, verifies each completed line
@@ -112,7 +165,51 @@ first line is always consumed as a password guess.
 
 Centralising the gate in `cli` (rather than duplicating an `authLogin` call in
 rnsh, as sshd does at its protocol layer) means there is provably no path from
-an accepted Channel to a running command that skips the password.
+an accepted Channel to a running command that skips the password — and it is
+why the allowed list is expressed as `login = 0` at connect rather than as an
+`authed` shortcut somewhere inside the gate.
+
+## 3a. Colour, and how the peer's terminal is sensed
+
+`s.rnsh.server.color` is the operator's preference, not the decision. The
+decision is taken with it at `ExecuteCommand`, from what the peer says it is:
+
+```
+canColor = parsed && cmdline is nil && !pipe_stdout && term is not dumb/mono
+color    = canColor && s.rnsh.server.color   ? CLI_COLOR : CLI_NO_COLOR
+```
+
+Those three fields are worth trusting because upstream fills them from the
+client's own file descriptors, not from configuration —
+`pipe_stdout=not os.isatty(1)`, `term=os.environ["TERM"]`, and `cmdline` is
+whatever the operator typed after `--` (`initiator.py`). So a peer that pipes
+our output to a file, or ran `rnsh <hash> -- something`, is asking to be read by
+a program rather than a person, and never gets escapes — which is the guarantee
+the switch alone could not make. A payload that fails to parse is treated as the
+least capable peer, not as an unknown to guess about.
+
+`termWantsColor` reads `$TERM` conventionally: empty means we know of no
+terminal, `dumb` names one that cannot colour, and a `-mono` / `-m` suffix names
+one that has been told not to.
+
+**Reading the payload needs a msgpack decoder**, which is new: everything before
+this only ever *wrote* msgpack, and the two fields anyone read (`VersionInfo`)
+were never actually decoded. The three fields that matter sit at indices 0, 2 and
+5, so getting to `term` means stepping over `tcflags` — a termios tuple with a
+nested list inside it. Hence a complete skipper, and an **iterative** one: the
+bytes are attacker-controlled and the server task has an 8 KB stack, so
+`mpSkipN` pushes a container's children onto a counter rather than onto the
+stack, and rejects any element count larger than the bytes left (every value
+costs at least one).
+
+**The client declares itself the same way.** `cliRnsh` sends
+`term = cliWantsColor() ? "xterm" : "xterm-mono"` rather than always claiming
+`xterm`. `cliWantsColor()` is true exactly when the slot the command runs on is
+an interactive ANSI slot that asked for colour, so a LINE-mode browser terminal,
+a scripted `spangap cli "rnsh …"`, or an operator who turned colour off all
+declare `xterm-mono`. Choosing `-mono` over `dumb` is deliberate: it withdraws
+colour without withdrawing the terminal, so a stock listener still allocates a
+PTY and its cursor/editing sequences keep working.
 
 ## 4. The client relay (`cliRnsh`)
 
@@ -127,8 +224,8 @@ an accepted Channel to a running command that skips the password.
    plus establishment) or `failed` (prints `last_error`); Ctrl-C aborts;
 4. **handshake:** sends `VersionInfo`, waits (~15 s) for the server's
    `VersionInfo` reply, then sends one `ExecuteCommand` (default shell,
-   interactive PTY — `pipe_*` false; our server ignores the payload, a stock
-   server sizes its PTY from it);
+   interactive PTY — `pipe_*` false, `term` from `cliWantsColor()` per §3a; a
+   stock server sizes its PTY from it, ours reads it for the colour decision);
 5. enters the relay loop: drains inbound frames — `StreamData(stdout/stderr)` →
    decompress if flagged → `cliWrite`; `CommandExited`/`Error` end the session —
    and reads `cliReadRaw` operator keystrokes, **coalescing** them into one
@@ -159,6 +256,15 @@ connection's ring, so it works without the owning task polling.
 
 ## 5. Pitfalls
 
+- **The allowed list fails closed, and it fails silently.** An identity is only
+  ever trusted because `rnsd.chan.<tag>.remote_identity` says so. If rnsd stops
+  publishing it — the inbound channel's `set_remote_identified_callback` going
+  missing, a peer that simply never identifies, an identify packet lost on the
+  air — every session reads `""`, nobody matches, and the server falls back to
+  the password prompt (or, with `password off`, refuses everyone). That is the
+  right direction to fail in, but it looks like a config problem rather than a
+  transport one: `rnshd allowed` will list the hash while the log line for the
+  session says `peer unidentified`.
 - **The cli task stack is small (6 KB); keep the relay's frame off it.**
   `cliRnsh`'s relay buffers (`in`, `fwd`, `rx`, `tx`, `sframe`, and the 16 KB
   `decomp`) are `PSRAM_BSS static`, not automatic. `itsRecv`/`cliReadRaw` are
@@ -187,6 +293,12 @@ connection's ring, so it works without the owning task polling.
   with no terminal geometry: the server only ever emits `StreamData(stdout)`,
   and `WindowSize` frames are accepted and dropped. Peers see a valid session;
   they just never receive a separate `stderr` or act on a resize from us.
+- **`cmdline` is read but never run.** `decodeExec` looks at it only to decide
+  that the session is a one-shot and must not be coloured (§3a). A peer that ran
+  `rnsh <hash> -- reboot` still lands in the interactive cli at the password
+  prompt, not in `reboot`. That is the long-standing behaviour — the device has
+  one "command" — but it now *knows* it is ignoring a request, which is the
+  place to start from if one-shot execution is ever wanted.
 - **Our side never compresses; incoming compression is decompressed.** Upstream
   bz2-compresses stream chunks > 32 B when it shrinks them (common for a stock
   listener's larger output). We always send uncompressed (no MCU compress cost)
@@ -214,10 +326,13 @@ directions. Each Channel message is one upstream-typed envelope; magic `0xac`,
 The 16-bit envelope msgtype is carried between rnsd and rnsh on the channel ITS
 pipe framed as `[msgtype:2 BE][payload]` (see [rns/INTERNALS.md](../rns/INTERNALS.md)
 and `rnsdChannelOpen`); the underlying `RNS::Channel` now sends and delivers an
-arbitrary msgtype rather than a single `MSGTYPE_RAW`. rnsh builds/parses the
-small tuples with an inline msgpack appender (`Buf` + `mp*`) and dispatches
-purely on msgtype — only `StreamData` and the two `VersionInfo` fields need any
-payload decoding. Session end is an in-band `CommandExited` (or `Error`), or
+arbitrary msgtype rather than a single `MSGTYPE_RAW`. rnsh dispatches purely on
+msgtype, builds the small tuples with an inline msgpack appender (`Buf` + `mp*`)
+and reads them back with an inline reader (`Rd` + `mpHeader`/`mpSkipN`/`mpNext`,
+§3a). Only two payloads are decoded at all: `StreamData`'s 2-byte header, and
+three of `ExecuteCommand`'s ten fields. `VersionInfo` is matched on msgtype
+alone — the version it carries is never inspected, since there is only one
+protocol version to speak. Session end is an in-band `CommandExited` (or `Error`), or
 Channel/Link teardown (`itsConnected(ch)` going false).
 
 Because the stock tool *is* the reference peer now, the raw-`0x0100` test peers
