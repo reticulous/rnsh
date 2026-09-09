@@ -19,7 +19,7 @@ the main task after rns is up. It:
 - generates the rnsh identity (`RNSH_IDENTITY_KEY`, idempotent) so the client
   can identify and the server host under it, whichever runs first, and publishes
   its hash to `rnsh.identity` — the value a remote node allows to let us in;
-- subscribes the `rnsh.peer.*` list sentinels (§3), `onStorageTask` so they work
+- subscribes the `rnsh.peer.*` list command keys (§3), `onStorageTask` so they work
   with the server task idle or absent;
 - registers the `rnsh` client command and the `rnshd` server-control command
   (`cliRegisterCmd`);
@@ -30,7 +30,7 @@ front-end on the cli task: no arg prints the status block (destination hash,
 `rnsh.identity`, password policy, allowed count); `enable`/`disable` just write
 `s.rnsh.server.enabled` (the server task reconciles within ~1 s); `announce` sets
 a `volatile` request flag the server task serves on its next loop;
-`allowed`/`allow`/`deny` call the same store functions the sentinels do, and
+`allowed`/`allow`/`deny` call the same store functions the command keys do, and
 `password` writes `s.rnsh.server.password`. Nothing here touches the server
 task's state — admission is read fresh per session, so an edit takes effect on
 the next connect and never disturbs a live one.
@@ -142,14 +142,14 @@ was asked for and is reported by `rnshd` status.
 
 The store is `s.rnsh.server.allowed[]` — `{ id, hash, label }` per item, the
 sshd `authorized_keys` shape: `hash` is compared, `label` is the finished row
-text, `id` is a small opaque number so a sentinel can name an item without
+text, `id` is a small opaque number so a command key can name an item without
 carrying the hash or an index that the next removal invalidates. Every mutation
 arrives on `rnsh.peer.add` / `rnsh.peer.remove` and is validated in `rnsh.cpp`,
 which answers on `rnsh.peer.error` / `rnsh.peer.done` — the CLI's `rnshd allow` /
 `rnshd deny` go through the same functions, so there is one validator and one
-writer. The sentinels are subscribed `onStorageTask` because the list is edited
+writer. The command keys are subscribed `onStorageTask` because the list is edited
 from the browser or the display, not from the server task's loop; the handler
-clears its own sentinel, and the leading empty-value guard is what stops that
+clears its own command key, and the leading empty-value guard is what stops that
 write from recursing.
 
 For an unlisted peer that does get the prompt, rnsh does **not** call

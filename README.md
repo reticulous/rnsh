@@ -146,7 +146,7 @@ rnshd password [on|off]           admit unlisted peers by admin password
 
 `announce` matters only for a re-announce: the destination announces once when
 the server opens, and each interface decides how often that goes back on the air
-— see [rns/README.md](../rns/README.md), "The announce beat".
+— see [rns/README.md](../rns/README.md), "The announce tick".
 
 A remote node then runs `rnsh <that_hash>`, is prompted for the admin password,
 and gets an interactive device CLI. To skip that prompt, read the remote's own
@@ -215,7 +215,7 @@ The server contributes a generated settings pane (Settings → Reticulum Mesh �
 Remote shell) from this straddle's `settings:` block — the enable switch, server
 color, the password-login switch, the read-only server address and our own
 identity, and the editor for the passwordless-identity list. The list's adds and
-removes arrive as `rnsh.peer.*` sentinels that `rnsh.cpp` validates and applies,
+removes arrive as `rnsh.peer.*` command keys that `rnsh.cpp` validates and applies,
 so a malformed hash comes back as a sentence, not as a UI rule. There is no
 hand-written Vue panel and no browser UI for the client.
 
