@@ -144,6 +144,9 @@ rnshd deny <id>                   drop one (id from `rnshd allowed`)
 rnshd password [on|off]           admit unlisted peers by admin password
 ```
 
+A hash — `rnsh <dest_hash>`, `rnshd allow`, the allow-list form — may be typed
+in space-separated groups and in full (64 hex, whose leading 32 are the hash).
+
 `announce` matters only for a re-announce: the destination announces once when
 the server opens, and each interface decides how often that goes back on the air
 — see [rns/README.md](../rns/README.md), "The announce tick".

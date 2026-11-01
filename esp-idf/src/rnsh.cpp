@@ -312,6 +312,45 @@ static bool hexToBytes(const char* hex, uint8_t* out, size_t outLen) {
     return true;
 }
 
+/** The hash at the front of `p`, joined across the spaces of a grouped paste:
+ *  whitespace-separated hex words are taken while short of `want` characters,
+ *  and on to twice that when they make exactly a full-length hash, of which
+ *  the leading `want` characters are returned. `p` is left after the last. */
+static std::string takeHexArg(const char*& p, size_t want) {
+    auto word = [](const char*& s, const char*& e, bool& hex) {
+        while (isspace((unsigned char)*s)) s++;
+        hex = true;
+        for (e = s; *e && !isspace((unsigned char)*e); e++)
+            if (!isxdigit((unsigned char)*e)) hex = false;
+    };
+    std::string out;
+    const char* s = p;
+    const char* e;
+    bool hex, allHex = true;
+    for (;;) {
+        word(s, e, hex);
+        if (e == s || (!hex && !out.empty())) break;
+        out.append(s, e - s);
+        s = e;
+        if (!hex) { allHex = false; break; }
+        if (out.size() >= want) break;
+    }
+    if (allHex && out.size() >= want && out.size() < 2 * want) {
+        std::string more = out;
+        const char* t = s;
+        while (more.size() < 2 * want) {
+            word(t, e, hex);
+            if (e == t || !hex) break;
+            more.append(t, e - t);
+            t = e;
+        }
+        if (more.size() == 2 * want) { out = more; s = t; }
+    }
+    if (allHex && out.size() == 2 * want) out.resize(want);
+    p = s;
+    return out;
+}
+
 /* ═════════════════════ passwordless-identity store ═════════════════════
  *
  * s.rnsh.server.allowed is an array of per-field objects:
@@ -340,12 +379,15 @@ std::string peerField(int idx, const char* field) {
     return storageGetStr(k, "");
 }
 
-/** Lowercased and trimmed, which is the form stored and compared. */
+/** Lowercased with every space removed, and a full-length hex hash cut to its
+ *  leading 16 bytes — the form stored and compared. */
 std::string peerNormalize(const std::string& raw) {
-    std::string s = raw;
-    while (!s.empty() && isspace((unsigned char)s.front())) s.erase(0, 1);
-    while (!s.empty() && isspace((unsigned char)s.back()))  s.pop_back();
-    for (char& c : s) c = (char)tolower((unsigned char)c);
+    std::string s;
+    for (char c : raw)
+        if (!isspace((unsigned char)c)) s += (char)tolower((unsigned char)c);
+    if (s.size() == RNSD_IDENT_HASH_LEN * 4 &&
+        s.find_first_not_of("0123456789abcdef") == std::string::npos)
+        s.resize(RNSD_IDENT_HASH_LEN * 2);
     return s;
 }
 
@@ -503,20 +545,22 @@ static int decodeStream(const uint8_t* payload, size_t n, uint8_t* scratch, size
 static void cliRnsh(const char* args) {
     if (cliWantsHelp(args)) {
         cliPrintf("rnsh <dest_hash> [aspect]   open a remote CLI over Reticulum\n");
-        cliPrintf("                            dest_hash = 32-hex; aspect defaults to \"rnsh\"\n");
+        cliPrintf("                            dest_hash = 32-hex (or full 64); aspect defaults to \"rnsh\"\n");
         cliPrintf("                            type '..!' on a new line to disconnect.\n");
         return;
     }
-    char hex[80] = {}, aspect[32] = {};
-    int got = sscanf(args, "%79s %31s", hex, aspect);
-    if (got < 1 || hex[0] == '\0') {
+    char aspect[32] = {};
+    const char* rest = args;
+    std::string hex = takeHexArg(rest, RNSD_DEST_HASH_LEN * 2);
+    sscanf(rest, "%31s", aspect);
+    if (hex.empty()) {
         cliPrintf("usage: rnsh <dest_hash> [aspect]\n");
         return;
     }
     if (aspect[0] == '\0') safeStrncpy(aspect, "rnsh", sizeof(aspect));
 
     uint8_t dh[RNSD_DEST_HASH_LEN];
-    if (!hexToBytes(hex, dh, sizeof(dh))) {
+    if (!hexToBytes(hex.c_str(), dh, sizeof(dh))) {
         cliPrintf("rnsh: dest_hash must be %d hex chars\n", (int)(RNSD_DEST_HASH_LEN * 2));
         return;
     }
@@ -535,7 +579,7 @@ static void cliRnsh(const char* args) {
         return;
     }
 
-    cliPrintf("rnsh: connecting to %s (aspect %s)...\r\n", hex, aspect);
+    cliPrintf("rnsh: connecting to %s (aspect %s)...\r\n", hex.c_str(), aspect);
 
     char stateKey[64];
     snprintf(stateKey, sizeof(stateKey), "rnsd.chan.%s.state", tag);
@@ -1210,10 +1254,8 @@ static void cliRnshd(const char* args) {
     }
 
     if (strcmp(sub, "allow") == 0) {
-        char hash[80] = {};
-        int hashLen = 0;
-        sscanf(rest, "%79s%n", hash, &hashLen);
-        const char* label = hash[0] ? rest + hashLen : "";
+        const char* label = rest;
+        std::string hash = takeHexArg(label, RNSD_IDENT_HASH_LEN * 2);
         while (*label == ' ') label++;
         peerAdd(hash, label);
         std::string why = storageGetStr("rnsh.peer.error", "");
